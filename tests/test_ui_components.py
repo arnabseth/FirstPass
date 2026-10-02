@@ -151,11 +151,13 @@ def test_repopulate_empty_and_missing_preview(window, tmp_path):
 
 
 def test_header_workflow_signals(window, monkeypatch):
-    from PyQt6.QtWidgets import QFileDialog
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
     folders, purges = [], []
     window.folder_selected.connect(folders.append)
     window.purge_requested.connect(purges.append)
+    window.folder_selected.disconnect(window.start_scan)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args: "C:/photos")
     window.open_folder_button.click()
     assert folders == ["C:/photos"]

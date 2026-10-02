@@ -31,8 +31,8 @@
 | **M1_CORE_IO** | RAW ingestion, embedded JPEG preview extractor, EXIF reader & disk cache | `src/core/scanner.py`, `src/core/extractor.py`, `tests/test_extractor.py` | **COMPLETED** | `pytest tests/test_extractor.py -v`: 20 passed | Initial Module 1 commit |
 | **M2_ALGO** | Sharpness scoring (Laplacian) & Burst clustering (pHash) | `src/core/analyzer.py`, `src/core/clusterer.py`, `tests/test_analyzer_clusterer.py` | **COMPLETED** | `pytest tests/test_analyzer_clusterer.py -v`: 11 passed | Uncommitted |
 | **M3_UI_SHELL** | PyQt6 Main Window, QSS theme, thumbnail grid | `src/ui/main_window.py`, `src/ui/theme.py`, `src/ui/components.py`, `tests/test_ui_components.py` | **COMPLETED** | `pytest tests/test_ui_components.py -v`: 7 passed | Uncommitted |
-| **M4_ASYNC** | Non-blocking QThread worker for folder analysis | `src/pipeline/scanner_worker.py`, `src/pipeline/data_models.py` | **TODO** | Pending | - |
-| **M5_PURGE** | Non-destructive batch deletion to Trash/Recycle Bin | `src/core/file_ops.py`, `tests/test_file_ops.py` | **TODO** | Pending | - |
+| **M4_ASYNC** | Non-blocking QThread worker for folder analysis | `src/workers/cull_worker.py`, `src/ui/main_window.py`, `tests/test_file_ops_worker.py` | **COMPLETED** | Full suite: `pytest -q` — 50 passed in 1.13s | Uncommitted |
+| **M5_PURGE** | Non-destructive batch deletion and desktop entry point | `src/core/file_ops.py`, `main.py`, `tests/test_file_ops_worker.py` | **COMPLETED** | Full suite: `pytest -q` — 50 passed in 1.13s | Uncommitted |
 | **M6_PACKAGE** | Cross-platform build scripts (PyInstaller) | `build_windows.spec`, `build_mac.spec` | **TODO** | Pending | - |
 
 ---
@@ -51,10 +51,20 @@
 * **Step 3.1 — Native Dark Interface and Cluster Survey Layout:** **COMPLETED**. Task-specified dark QSS palette, aspect-preserving thumbnails, sharpness badges, PICK/REJECT indicators, horizontal cluster rows, scrollable survey, header controls and live counters.
 * **Step 3.2 — Keyboard Culling and Selection:** **COMPLETED**. Left/Right navigation across clusters; Space picks; Delete/Backspace reject; 1/5 toggle mutually exclusive pick/reject flags. Click selection, dynamic QSS properties and border repolishing, empty-state handling and headless tests included.
 * **Validation (2026-10-02):** `pytest tests/test_ui_components.py -v` — **7 passed in 0.88s**. Covers layout, thumbnail aspect ratio, resolved border colors, navigation boundaries, all culling shortcuts, mouse selection, shortcuts with button focus, repopulation, missing previews and workflow signals.
-* **Integration Scope:** Open Folder emits `folder_selected`; Purge Rejects emits `purge_requested` with rejected PhotoItems. Background scanning and confirmed trash execution remain in Modules 4 and 5. This task's explicit colors and keyboard bindings take precedence over the older BRANDING/UI_GUIDE values.
+* **Integration Scope:** Open Folder emits `folder_selected`; Purge Rejects emits `purge_requested` with rejected PhotoItems. Modules 4 and 5 now connect background scanning and confirmed trash execution. This task's explicit colors and keyboard bindings take precedence over the older BRANDING/UI_GUIDE values.
+
+### M4_AsyncIntegration
+* **Status:** **COMPLETED**. `CullWorker(QThread)` scans directories, extracts cached previews, calculates sharpness and pHash, groups and ranks bursts, and emits progress, individual clusters, final clusters, and errors. The UI starts the worker from folder selection, displays progress, and appends ClusterRow widgets on the GUI thread.
+* **Safety and Lifecycle:** Cache directories are isolated by source folder to prevent same-basename collisions. Missing capture timestamps receive isolated timestamps so unknown-time images remain singleton picks. Scanning disables purge and culling edits; Esc interrupts between pipeline operations. Closing an active scan defers window destruction until the worker stops.
+
+### M5_FileOps
+* **Status:** **COMPLETED**. Explicit rejects go through `send2trash.send2trash`; dry runs return candidates without disk changes. Preview cleanup follows successful trash moves, protects originals and previews shared by retained items, and tolerates missing cache files. Partial failures report completed paths so the UI removes only successfully trashed items.
+* **Desktop Integration:** Purge uses a default-No confirmation dialog with the requested file count and updates rows and stats after acceptance. `main.py` configures Qt high-DPI rounding, creates QApplication, applies the dark theme, and shows MainWindow. `send2trash>=1.8.2` is included in requirements.
+* **Final Validation (2026-10-02):** `.venv/Scripts/pytest.exe -q` across the entire project — **50 passed in 1.13s**. Includes all prior core/UI tests plus mocked trash invocation, dry-run preservation, cache safety, partial failures, actual background-thread execution, progress/result/error signals, empty scans, unknown timestamps, cache separation, folder-to-purge UI integration, and safe cancellation on window close. Tests use offscreen Qt and mocked trash operations; real OS Trash and real-camera throughput remain unmeasured. No Git commit was created.
 
 ## 4. Current State & Handoff Context
-* **Active Milestone:** `M3_UI_SHELL` completed; ready for `M4_ASYNC`.
-* **Current Action Item:** Connect background folder analysis to the UI's folder selection signal and cluster population method.
-* **Open Technical Debt / Warnings:** rawpy does not support `fast_render`; fallback uses half-size output with LINEAR demosaicing and no automatic brightness. The requested built-in `hash(raw_path.name)` filename varies across Python processes and can collide for identical filenames in different folders.
-* **Next Handoff Target:** Execute Milestone 4. Module 3 changes remain uncommitted as requested.
+* **Current State:** Core Application Fully Functional.
+* **Active Milestone:** `M4_AsyncIntegration` and `M5_FileOps` completed.
+* **Current Action Item:** Review the uncommitted implementation; launch the desktop app with `.venv/Scripts/python.exe main.py`.
+* **Open Technical Debt / Warnings:** rawpy does not support `fast_render`; fallback uses half-size output with LINEAR demosaicing and no automatic brightness. Extractor cache filenames still vary across Python processes; the worker isolates source folders to prevent cross-folder collisions. Interruption is cooperative and waits for an in-flight extraction or analysis operation to finish. Real-camera throughput and actual OS Trash behavior remain unmeasured.
+* **Next Handoff Target:** `M6_PACKAGE` cross-platform packaging. Changes remain uncommitted as requested.

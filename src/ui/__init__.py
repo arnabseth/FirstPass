@@ -1,0 +1,1 @@
+"""Native FirstPass interface."""
