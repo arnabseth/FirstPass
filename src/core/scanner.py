@@ -40,7 +40,10 @@ def scan_directory(path: Path) -> List[Path]:
             if not _is_hidden_or_system(parent / name)
         ]
         for name in files:
+            # Reject sidecars and AppleDouble/resource-fork artifacts up front.
+            if name.startswith(".") or Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
             candidate = parent / name
-            if candidate.suffix.lower() in SUPPORTED_EXTENSIONS and not _is_hidden_or_system(candidate):
+            if not _is_hidden_or_system(candidate) and candidate.is_file():
                 result.append(candidate)
     return sorted(result, key=lambda item: (str(item).casefold(), str(item)))

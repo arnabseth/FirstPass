@@ -122,18 +122,19 @@ def test_invalid_path(tmp_path, decoder, kind, exception):
     assert not (tmp_path / "cache").exists()
 
 
-def test_invalid_raw_data_raises_without_decoder_mock(source, tmp_path):
-    with pytest.raises(rawpy.LibRawError):
-        extractor.extract_embedded_jpeg(source, tmp_path / "cache")
+def test_invalid_raw_data_skips_without_decoder_mock(source, tmp_path, capfd, caplog):
+    assert extractor.extract_embedded_jpeg(source, tmp_path / "cache") is None
+    assert capfd.readouterr() == ("", "")
+    assert "without a readable preview" in caplog.text
+    assert "File format not recognized" not in caplog.text
     assert list((tmp_path / "cache").iterdir()) == []
 
 
-def test_render_failure_propagates(source, tmp_path, decoder):
+def test_render_failure_skips(source, tmp_path, decoder):
     raw, _ = decoder
     raw.extract_thumb.side_effect = rawpy.LibRawNoThumbnailError()
     raw.postprocess.side_effect = rawpy.LibRawError("render failed")
-    with pytest.raises(rawpy.LibRawError):
-        extractor.extract_embedded_jpeg(source, tmp_path / "cache")
+    assert extractor.extract_embedded_jpeg(source, tmp_path / "cache") is None
     assert list((tmp_path / "cache").iterdir()) == []
     raw.__exit__.assert_called_once()
 
@@ -158,6 +159,8 @@ def test_scan_all_extensions_recursively_and_prune_hidden(tmp_path):
         path.touch()
         expected.append(path)
     (nested / "image.jpg").touch()
+    for name in ("capture.ARW.xmp", "capture.xmp", "._capture.ARW", "notes.txt", "capture.ARW.bak", "capture.orf", "capture.pef"):
+        (nested / name).touch()
     (nested / ".hidden.ARW").touch()
     hidden = tmp_path / ".hidden"
     hidden.mkdir()
@@ -188,3 +191,72 @@ def test_scan_invalid_root(tmp_path):
     file.touch()
     with pytest.raises(NotADirectoryError):
         scanner.scan_directory(file)
+
+
+def jpeg_bytes(size=(96, 64)):
+    stream = BytesIO()
+    Image.new("RGB", size, "orange").save(stream, "JPEG")
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize("failure", [rawpy.LibRawFileUnsupportedError(), RuntimeError("broken header")])
+def test_unsupported_raw_recovers_largest_valid_jpeg(source, tmp_path, monkeypatch, failure, capfd):
+    payload = b"RAW header\xff\xd8invalid\xff\xd9" + jpeg_bytes((16, 16)) + b"padding" + jpeg_bytes((128, 96))
+    source.write_bytes(payload + b"\xff\xd8truncated")
+    def reject(path):
+        os.write(2, b"File format not recognized.\n")
+        raise failure
+    monkeypatch.setattr(extractor.rawpy, "imread", reject)
+    preview, _ = extractor.extract_embedded_jpeg(source, tmp_path / "cache")
+    with Image.open(preview) as image:
+        assert image.size == (128, 96)
+    assert capfd.readouterr() == ("", "")
+    os.write(2, b"stderr restored\n")
+    assert capfd.readouterr().err == "stderr restored\n"
+
+
+def test_pillow_tiff_fallback(tmp_path, monkeypatch):
+    source = tmp_path / "capture.dng"
+    Image.new("RGB", (48, 32), "blue").save(source, "TIFF")
+    def reject(path):
+        raise rawpy.LibRawFileUnsupportedError()
+    monkeypatch.setattr(extractor.rawpy, "imread", reject)
+    preview, _ = extractor.extract_embedded_jpeg(source, tmp_path / "cache")
+    with Image.open(preview) as image:
+        assert image.size == (48, 32)
+
+
+@pytest.mark.parametrize("payload", [b"", b"not a RAW", b"\xff\xd8bad\xff\xd9", b"\xff\xd8truncated"])
+def test_unreadable_raw_silent_and_no_cache(payload, tmp_path, capfd, caplog):
+    source = tmp_path / "bad.nef"
+    source.write_bytes(payload)
+    assert extractor.extract_embedded_jpeg(source, tmp_path / "cache") is None
+    assert capfd.readouterr() == ("", "")
+    assert "without a readable preview" in caplog.text
+    assert list((tmp_path / "cache").iterdir()) == []
+
+
+def test_stderr_without_fileno(source, tmp_path, decoder, monkeypatch, capfd):
+    from io import StringIO
+    monkeypatch.setattr(extractor.sys, "stderr", StringIO())
+    raw, _ = decoder
+    thumb = raw.extract_thumb.return_value
+    def extract():
+        os.write(2, b"native diagnostic\n")
+        return thumb
+    raw.extract_thumb.side_effect = extract
+    assert extractor.extract_embedded_jpeg(source, tmp_path / "cache") is not None
+    assert capfd.readouterr() == ("", "")
+
+
+def test_embedded_jpeg_with_nested_exif_thumbnail(source, tmp_path, monkeypatch):
+    outer, inner = jpeg_bytes((128, 96)), jpeg_bytes((16, 16))
+    # A JPEG APP segment can contain another complete JPEG thumbnail.
+    segment = b"thumbnail metadata" + inner
+    source.write_bytes(b"RAW" + outer[:2] + b"\xff\xe1" +
+                       (len(segment) + 2).to_bytes(2, "big") + segment + outer[2:])
+    monkeypatch.setattr(extractor.rawpy, "imread",
+                        lambda path: (_ for _ in ()).throw(rawpy.LibRawFileUnsupportedError()))
+    preview, _ = extractor.extract_embedded_jpeg(source, tmp_path / "cache")
+    with Image.open(preview) as image:
+        assert image.size == (128, 96)

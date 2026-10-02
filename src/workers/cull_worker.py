@@ -36,7 +36,11 @@ class CullWorker(QThread):
                 self.progress.emit(index * 2, total, f"Extracting preview: {path.name}")
                 # The extractor names entries by basename; isolate source folders.
                 key = hashlib.sha256(str(path.parent.resolve()).encode()).hexdigest()
-                preview, timestamp = extract_embedded_jpeg(path, self.cache_dir / key)
+                extracted = extract_embedded_jpeg(path, self.cache_dir / key)
+                if extracted is None:
+                    self.progress.emit(index * 2 + 1, total, f"Skipping unreadable frame: {path.name}")
+                    continue
+                preview, timestamp = extracted
                 self.progress.emit(index * 2 + 1, total, f"Evaluating sharpness: {path.name}")
                 # Unknown capture times must not produce automatic burst rejects.
                 timestamp = timestamp or datetime.min + timedelta(days=index + 1)

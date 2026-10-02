@@ -174,6 +174,26 @@ def test_worker_extraction_failure(app, tmp_path, monkeypatch):
     assert not clusters and not results and errors == ["Invalid RAW"]
 
 
+@pytest.mark.parametrize("include_readable", [True, False])
+def test_worker_skips_unreadable_frames(app, tmp_path, monkeypatch, include_readable):
+    (tmp_path / "bad.ARW").write_bytes(b"invalid RAW")
+    if include_readable:
+        (tmp_path / "good.ARW").write_bytes(b"mock")
+    mock_extractor(monkeypatch)
+    extract = cull_worker.extract_embedded_jpeg
+    monkeypatch.setattr(cull_worker, "extract_embedded_jpeg",
+                        lambda path, cache: None if path.stem == "bad" else extract(path, cache))
+    worker = cull_worker.CullWorker(tmp_path)
+    worker.cache_dir = tmp_path / "cache"
+    progress, clusters, results, errors = collect_worker(app, worker)
+    assert not errors and results == [clusters]
+    assert len(clusters) == int(include_readable)
+    if include_readable:
+        assert clusters[0][0].raw_path.name == "good.ARW"
+    assert any("Skipping unreadable frame" in p[2] for p in progress)
+    assert progress[-1][0] == progress[-1][1]
+
+
 def test_close_during_scan_cancels_without_destroying_thread(app, tmp_path, monkeypatch):
     from threading import Event
     entered, release = Event(), Event()
