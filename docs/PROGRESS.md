@@ -29,7 +29,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **M0_BOOTSTRAP** | Repo structure, docs, dependencies, gitignore | `requirements.txt`, `.gitignore`, `docs/*` | **COMPLETED** | Tree & environment verified | Pending Module 1 |
 | **M1_CORE_IO** | RAW ingestion, embedded JPEG preview extractor, EXIF reader & disk cache | `src/core/scanner.py`, `src/core/extractor.py`, `tests/test_extractor.py` | **COMPLETED** | `pytest tests/test_extractor.py -v`: 20 passed | Initial Module 1 commit |
-| **M2_ALGO** | Sharpness scoring (Laplacian) & Burst clustering (pHash) | `src/core/sharpness.py`, `src/core/hashing.py`, `tests/test_algo.py` | **TODO** | Pending | - |
+| **M2_ALGO** | Sharpness scoring (Laplacian) & Burst clustering (pHash) | `src/core/analyzer.py`, `src/core/clusterer.py`, `tests/test_analyzer_clusterer.py` | **COMPLETED** | `pytest tests/test_analyzer_clusterer.py -v`: 11 passed | Uncommitted |
 | **M3_UI_SHELL** | PyQt6 Main Window, QSS theme, thumbnail grid | `src/ui/main_window.py`, `src/ui/styles.py`, `src/ui/survey_view.py` | **TODO** | Pending | - |
 | **M4_ASYNC** | Non-blocking QThread worker for folder analysis | `src/pipeline/scanner_worker.py`, `src/pipeline/data_models.py` | **TODO** | Pending | - |
 | **M5_PURGE** | Non-destructive batch deletion to Trash/Recycle Bin | `src/core/file_ops.py`, `tests/test_file_ops.py` | **TODO** | Pending | - |
@@ -42,8 +42,13 @@
 * **Step 1.2 — Embedded Preview Extractor and Disk Cache:** **COMPLETED**. Embedded JPEG extraction, half-size fallback bounded to 1080p, quality-85 JPEG cache, EXIF DateTimeOriginal, cache reuse and stale/corrupt entry regeneration.
 * **Validation (2026-10-02):** `pytest tests/test_extractor.py -v` — **20 passed in 1.52s**. Synthetic decoder/JPEG tests, installed rawpy parameter validation, scanner tests, and real rawpy rejection of invalid RAW data. Real-camera RAW throughput remains unmeasured.
 
+### M2_ClusteringScoring
+* **Step 2.1 — Sharpness Evaluation and Perceptual Hashing:** **COMPLETED**. Grayscale Laplacian variance, zero score for unreadable previews, and DCT-based pHash with image file cleanup.
+* **Step 2.2 — Burst Clustering and Ranking:** **COMPLETED**. Chronological grouping using consecutive timestamp and pHash distances, zero-based cluster IDs, sharpest-frame picks, remaining-frame rejects, and singleton picks.
+* **Validation (2026-10-02):** `pytest tests/test_analyzer_clusterer.py -v` — **11 passed in 3.62s**. Synthetic sharp/blurred images, identical/inverted hashes, two-burst selection, unreadable images, empty/singleton inputs, inclusive thresholds, consecutive comparisons, custom thresholds, reranking, and tied scores.
+
 ## 4. Current State & Handoff Context
-* **Active Milestone:** `M1_CORE_IO` completed; ready for `M2_ALGO`.
-* **Current Action Item:** Implement sharpness scoring and burst clustering.
+* **Active Milestone:** `M2_ALGO` completed; ready for `M3_UI_SHELL`.
+* **Current Action Item:** Implement the PyQt6 main window and thumbnail grid.
 * **Open Technical Debt / Warnings:** rawpy does not support `fast_render`; fallback uses half-size output with LINEAR demosaicing and no automatic brightness. The requested built-in `hash(raw_path.name)` filename varies across Python processes and can collide for identical filenames in different folders.
-* **Next Handoff Target:** Execute Milestone 2. Module 1 is included in the initial Git commit.
+* **Next Handoff Target:** Execute Milestone 3. Module 1 is included in the initial Git commit; Module 2 changes remain uncommitted.
