@@ -30,7 +30,7 @@
 | **M0_BOOTSTRAP** | Repo structure, docs, dependencies, gitignore | `requirements.txt`, `.gitignore`, `docs/*` | **COMPLETED** | Tree & environment verified | Pending Module 1 |
 | **M1_CORE_IO** | RAW ingestion, embedded JPEG preview extractor, EXIF reader & disk cache | `src/core/scanner.py`, `src/core/extractor.py`, `tests/test_extractor.py` | **COMPLETED** | `pytest tests/test_extractor.py -v`: 20 passed | Initial Module 1 commit |
 | **M2_ALGO** | Sharpness scoring (Laplacian) & Burst clustering (pHash) | `src/core/analyzer.py`, `src/core/clusterer.py`, `tests/test_analyzer_clusterer.py` | **COMPLETED** | `pytest tests/test_analyzer_clusterer.py -v`: 11 passed | Uncommitted |
-| **M3_UI_SHELL** | PyQt6 Main Window, QSS theme, thumbnail grid | `src/ui/main_window.py`, `src/ui/styles.py`, `src/ui/survey_view.py` | **TODO** | Pending | - |
+| **M3_UI_SHELL** | PyQt6 Main Window, QSS theme, thumbnail grid | `src/ui/main_window.py`, `src/ui/theme.py`, `src/ui/components.py`, `tests/test_ui_components.py` | **COMPLETED** | `pytest tests/test_ui_components.py -v`: 7 passed | Uncommitted |
 | **M4_ASYNC** | Non-blocking QThread worker for folder analysis | `src/pipeline/scanner_worker.py`, `src/pipeline/data_models.py` | **TODO** | Pending | - |
 | **M5_PURGE** | Non-destructive batch deletion to Trash/Recycle Bin | `src/core/file_ops.py`, `tests/test_file_ops.py` | **TODO** | Pending | - |
 | **M6_PACKAGE** | Cross-platform build scripts (PyInstaller) | `build_windows.spec`, `build_mac.spec` | **TODO** | Pending | - |
@@ -47,8 +47,14 @@
 * **Step 2.2 — Burst Clustering and Ranking:** **COMPLETED**. Chronological grouping using consecutive timestamp and pHash distances, zero-based cluster IDs, sharpest-frame picks, remaining-frame rejects, and singleton picks.
 * **Validation (2026-10-02):** `pytest tests/test_analyzer_clusterer.py -v` — **11 passed in 3.62s**. Synthetic sharp/blurred images, identical/inverted hashes, two-burst selection, unreadable images, empty/singleton inputs, inclusive thresholds, consecutive comparisons, custom thresholds, reranking, and tied scores.
 
+### M3_UI_Layout
+* **Step 3.1 — Native Dark Interface and Cluster Survey Layout:** **COMPLETED**. Task-specified dark QSS palette, aspect-preserving thumbnails, sharpness badges, PICK/REJECT indicators, horizontal cluster rows, scrollable survey, header controls and live counters.
+* **Step 3.2 — Keyboard Culling and Selection:** **COMPLETED**. Left/Right navigation across clusters; Space picks; Delete/Backspace reject; 1/5 toggle mutually exclusive pick/reject flags. Click selection, dynamic QSS properties and border repolishing, empty-state handling and headless tests included.
+* **Validation (2026-10-02):** `pytest tests/test_ui_components.py -v` — **7 passed in 0.88s**. Covers layout, thumbnail aspect ratio, resolved border colors, navigation boundaries, all culling shortcuts, mouse selection, shortcuts with button focus, repopulation, missing previews and workflow signals.
+* **Integration Scope:** Open Folder emits `folder_selected`; Purge Rejects emits `purge_requested` with rejected PhotoItems. Background scanning and confirmed trash execution remain in Modules 4 and 5. This task's explicit colors and keyboard bindings take precedence over the older BRANDING/UI_GUIDE values.
+
 ## 4. Current State & Handoff Context
-* **Active Milestone:** `M2_ALGO` completed; ready for `M3_UI_SHELL`.
-* **Current Action Item:** Implement the PyQt6 main window and thumbnail grid.
+* **Active Milestone:** `M3_UI_SHELL` completed; ready for `M4_ASYNC`.
+* **Current Action Item:** Connect background folder analysis to the UI's folder selection signal and cluster population method.
 * **Open Technical Debt / Warnings:** rawpy does not support `fast_render`; fallback uses half-size output with LINEAR demosaicing and no automatic brightness. The requested built-in `hash(raw_path.name)` filename varies across Python processes and can collide for identical filenames in different folders.
-* **Next Handoff Target:** Execute Milestone 3. Module 1 is included in the initial Git commit; Module 2 changes remain uncommitted.
+* **Next Handoff Target:** Execute Milestone 4. Module 3 changes remain uncommitted as requested.
