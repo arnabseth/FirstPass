@@ -25,6 +25,8 @@ class CullWorker(QThread):
         self.cache_dir = Path(tempfile.gettempdir()) / "firstpass-previews"
 
     def run(self):
+        # Thread boundary: emit only PhotoItem dataclasses with preview Paths.
+        # QImage, QPixmap and all widgets belong exclusively to the GUI thread.
         try:
             self.progress.emit(0, 0, "Scanning RAW files...")
             paths = scan_directory(self.directory)

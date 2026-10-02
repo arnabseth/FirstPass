@@ -1,6 +1,9 @@
 """Keyboard-first review interface with asynchronous RAW analysis."""
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from collections import deque
+from time import monotonic
+
+from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
@@ -9,7 +12,7 @@ from PyQt6.QtWidgets import (
 
 from src.core.clusterer import PhotoItem
 from src.core.file_ops import PurgeError, purge_rejects
-from src.ui.components import ClusterRow
+from src.ui.components import ClusterRow, require_gui_thread
 from src.ui.theme import DARK_STYLESHEET
 from src.workers.cull_worker import CullWorker
 
@@ -30,6 +33,13 @@ class MainWindow(QMainWindow):
         self.scanning = False
         self._close_pending = False
         self._scan_cancelled = False
+        self._thread_stopped = False
+        self._pending_clusters = deque()
+        self._building_row = None
+        self._cluster_ids = set()
+        self.population_timer = QTimer(self)
+        self.population_timer.setInterval(1)
+        self.population_timer.timeout.connect(self._populate_batch)
         self.folder_selected.connect(self.start_scan)
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -84,9 +94,18 @@ class MainWindow(QMainWindow):
         return self.cards[self.active_index] if self.active_index >= 0 else None
 
     def populate_clusters(self, clusters: list[list[PhotoItem]]):
+        require_gui_thread()
+        self.population_timer.stop()
+        self._pending_clusters.clear()
+        self._building_row = None
+        self._cluster_ids.clear()
         while self.cluster_layout.count():
             widget = self.cluster_layout.takeAt(0).widget()
             if widget is not None:
+                # Release pixmaps immediately; QObject deletion is deferred safely.
+                for card in widget.cards:
+                    card.thumbnail.clear()
+                    card.thumbnail.source_pixmap = type(card.thumbnail.source_pixmap)()
                 widget.hide()
                 widget.deleteLater()
         self.cluster_rows = []
@@ -94,47 +113,90 @@ class MainWindow(QMainWindow):
         self.active_index = -1
         for cluster in clusters:
             self.append_cluster(cluster)
-        if self.cards:
-            self.select_index(0)
-        self.scan_status_label.setText(
-            f"Ready — {len(self.cluster_rows)} clusters" if self.cards else "No photos to review"
-        )
+        # Preserve immediate small-population behavior while bounding large work.
+        self._populate_batch()
+        if sum(len(cluster) for cluster in clusters) <= 24:
+            while self.populating:
+                self._populate_batch()
+
+    @pyqtSlot(list)
+    def append_cluster(self, cluster):
+        require_gui_thread()
+        if not cluster or self._scan_cancelled or self._close_pending:
+            return
+        cluster_id = cluster[0].cluster_id
+        if cluster_id in self._cluster_ids:
+            return
+        self._cluster_ids.add(cluster_id)
+        self._pending_clusters.append(cluster)
+        self.population_timer.start()
+        self.open_folder_button.setEnabled(False)
         self.update_stats()
 
-    def append_cluster(self, cluster):
-        if not cluster:
-            return
-        row = ClusterRow(cluster[0].cluster_id, cluster, self.content)
-        self.cluster_rows.append(row)
-        self.cluster_layout.addWidget(row)
-        for card in row.cards:
+    @property
+    def populating(self):
+        return bool(self._pending_clusters or self._building_row is not None)
+
+    @pyqtSlot()
+    def _populate_batch(self):
+        require_gui_thread()
+        deadline = monotonic() + 0.012
+        for _ in range(24):
+            if self._building_row is None:
+                if not self._pending_clusters:
+                    break
+                cluster = self._pending_clusters.popleft()
+                row = ClusterRow(cluster[0].cluster_id, [], self.content, frame_count=len(cluster))
+                self.cluster_rows.append(row)
+                self.cluster_layout.addWidget(row)
+                self._building_row = (row, cluster, 0)
+            row, cluster, index = self._building_row
+            card = row.append_item(cluster[index])
             card.clicked.connect(self.select_card)
             self.cards.append(card)
+            index += 1
+            self._building_row = (row, cluster, index) if index < len(cluster) else None
+            if monotonic() >= deadline:
+                break
         if self.active_index < 0:
             self.select_index(0)
+        if not self.populating:
+            self.population_timer.stop()
+            self.scan_status_label.setText(
+                f"Ready — {len(self.cluster_rows)} clusters" if self.cards else "No photos to review"
+            )
+            if self._thread_stopped and self.worker is not None:
+                self._finish_scan()
+            elif not self.scanning:
+                self.open_folder_button.setEnabled(True)
+        else:
+            self.scan_status_label.setText(f"Loading previews — {len(self.cards)} frames")
         self.update_stats()
 
     def start_scan(self, folder):
-        if self.worker is not None and self.worker.isRunning():
+        if self.worker is not None or self.populating:
             return
+        self._scan_cancelled = False
         self.populate_clusters([])
         self.scanning = True
-        self._scan_cancelled = False
+        self._thread_stopped = False
         self.open_folder_button.setEnabled(False)
         self.update_stats()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
         self.scan_status_label.setText("Scanning RAW files...")
         self.worker = CullWorker(folder, self)
-        self.worker.progress.connect(self.on_progress)
-        self.worker.cluster_ready.connect(self.append_cluster)
-        self.worker.finished.connect(self.on_scan_result)
-        self.worker.error.connect(self.on_scan_error)
+        self.worker.progress.connect(self.on_progress, Qt.ConnectionType.QueuedConnection)
+        self.worker.cluster_ready.connect(self.append_cluster, Qt.ConnectionType.QueuedConnection)
+        self.worker.finished.connect(self.on_scan_result, Qt.ConnectionType.QueuedConnection)
+        self.worker.error.connect(self.on_scan_error, Qt.ConnectionType.QueuedConnection)
         # CullWorker.finished(list) is the result signal; use the base signal
         # for lifetime management, including errors and interruption.
-        QThread.finished.__get__(self.worker, CullWorker).connect(self.on_scan_stopped)
+        QThread.finished.__get__(self.worker, CullWorker).connect(
+            self.on_scan_stopped, Qt.ConnectionType.QueuedConnection)
         self.worker.start()
 
+    @pyqtSlot(int, int, str)
     def on_progress(self, current, total, message):
         if not self.scanning or self._scan_cancelled:
             return
@@ -142,23 +204,38 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(current)
         self.scan_status_label.setText(message)
 
+    @pyqtSlot(list)
     def on_scan_result(self, clusters):
-        self.scan_status_label.setText(
-            f"Ready — {len(clusters)} clusters" if clusters else "No photos to review"
-        )
+        if self._scan_cancelled or self._close_pending:
+            return
+        # Also support completion-only producers; streamed clusters are deduped.
+        for cluster in clusters:
+            self.append_cluster(cluster)
+        if not self.populating:
+            self.scan_status_label.setText(
+                f"Ready — {len(clusters)} clusters" if clusters else "No photos to review"
+            )
 
+    @pyqtSlot(str)
     def on_scan_error(self, message):
         self.populate_clusters([])
         self.scan_status_label.setText("Scan failed")
         if not self._close_pending:
             QMessageBox.warning(self, "Scan failed", message)
 
+    @pyqtSlot()
     def on_scan_stopped(self):
+        self._thread_stopped = True
+        if self._scan_cancelled:
+            self.populate_clusters([])
+        if not self.populating and self.worker is not None:
+            self._finish_scan()
+
+    def _finish_scan(self):
         self.scanning = False
         self.progress_bar.hide()
         self.open_folder_button.setEnabled(True)
         if self._scan_cancelled:
-            self.populate_clusters([])
             self.scan_status_label.setText("Scan cancelled")
         self.worker.deleteLater()
         self.worker = None
@@ -170,6 +247,9 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self._scan_cancelled = True
             self.worker.requestInterruption()
+            # The thread may already have stopped while cards are still queued.
+            # Clear pending UI work now; no second stopped signal will arrive.
+            self.populate_clusters([])
 
     def closeEvent(self, event):
         if self.worker is not None:
@@ -177,6 +257,9 @@ class MainWindow(QMainWindow):
             self.cancel_scan()
             event.ignore()
         else:
+            self.population_timer.stop()
+            self._pending_clusters.clear()
+            self._building_row = None
             super().closeEvent(event)
 
     def select_card(self, card):
@@ -195,7 +278,7 @@ class MainWindow(QMainWindow):
         self.select_index(self.active_index + delta)
 
     def set_current_state(self, state, toggle=False):
-        if self.scanning:
+        if self.scanning or self.populating:
             return
         card = self.current_card
         if card is None:
@@ -214,7 +297,7 @@ class MainWindow(QMainWindow):
         picks = sum(card.item.is_pick for card in self.cards)
         rejects = sum(card.item.is_reject for card in self.cards)
         self.stats_label.setText(f"Total: {len(self.cards)} | Picks: {picks} | Rejects: {rejects}")
-        self.purge_button.setEnabled(rejects > 0 and not self.scanning)
+        self.purge_button.setEnabled(rejects > 0 and not self.scanning and not self.populating)
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Open Photo Folder")
@@ -223,7 +306,7 @@ class MainWindow(QMainWindow):
             self.folder_selected.emit(folder)
 
     def request_purge(self):
-        if self.scanning:
+        if self.scanning or self.populating:
             return
         rejects = [card.item for card in self.cards if card.item.is_reject]
         if rejects:

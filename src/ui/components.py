@@ -1,18 +1,37 @@
 """Photo cards and horizontal burst survey rows."""
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSize, QThread, Qt, pyqtSignal
+from PyQt6.QtGui import QImageReader, QPixmap
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from src.core.clusterer import PhotoItem
 
+THUMBNAIL_BOUNDS = QSize(300, 200)
+
+
+def require_gui_thread():
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() != app.thread():
+        raise RuntimeError("Photo widgets must be created on the GUI thread")
+
 
 class ThumbnailLabel(QLabel):
-    """Rescale the original preview whenever the display area changes."""
+    """Decode and retain only a bounded thumbnail on the GUI thread."""
 
     def __init__(self, path, parent=None):
+        require_gui_thread()
         super().__init__(parent)
-        self.source_pixmap = QPixmap(str(path))
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid():
+            reader.setScaledSize(size.scaled(THUMBNAIL_BOUNDS, Qt.AspectRatioMode.KeepAspectRatio))
+        image = reader.read()
+        # Auto-transform can swap width/height; bound the final orientation too.
+        if image.width() > 300 or image.height() > 200:
+            image = image.scaled(THUMBNAIL_BOUNDS, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        self.source_pixmap = QPixmap.fromImage(image)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(200, 150)
         self.setFixedHeight(180)
@@ -23,7 +42,7 @@ class ThumbnailLabel(QLabel):
             self.setText("Preview unavailable")
         else:
             self.setPixmap(self.source_pixmap.scaled(
-                self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                self.size().boundedTo(THUMBNAIL_BOUNDS), Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             ))
 
@@ -36,6 +55,7 @@ class PhotoCard(QFrame):
     clicked = pyqtSignal(object)
 
     def __init__(self, item: PhotoItem, parent=None):
+        require_gui_thread()
         super().__init__(parent)
         self.item = item
         self.selected = False
@@ -85,16 +105,24 @@ class PhotoCard(QFrame):
 
 
 class ClusterRow(QWidget):
-    def __init__(self, cluster_id: int, items: list[PhotoItem], parent=None):
+    def __init__(self, cluster_id: int, items: list[PhotoItem], parent=None, frame_count=None):
+        require_gui_thread()
         super().__init__(parent)
         self.cluster_id = cluster_id
         layout = QVBoxLayout(self)
-        self.header = QLabel(f"Cluster #{cluster_id} ({len(items)} frames)")
+        count = len(items) if frame_count is None else frame_count
+        self.header = QLabel(f"Cluster #{cluster_id} ({count} frames)")
         self.header.setObjectName("clusterHeader")
         layout.addWidget(self.header)
-        row = QHBoxLayout()
-        self.cards = [PhotoCard(item, self) for item in items]
-        for card in self.cards:
-            row.addWidget(card)
-        row.addStretch()
-        layout.addLayout(row)
+        self.card_layout = QHBoxLayout()
+        self.card_layout.addStretch()
+        layout.addLayout(self.card_layout)
+        self.cards = []
+        for item in items:
+            self.append_item(item)
+
+    def append_item(self, item):
+        card = PhotoCard(item, self)
+        self.cards.append(card)
+        self.card_layout.insertWidget(self.card_layout.count() - 1, card)
+        return card

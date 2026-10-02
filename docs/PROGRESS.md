@@ -62,6 +62,13 @@
 * **Desktop Integration:** Purge uses a default-No confirmation dialog with the requested file count and updates rows and stats after acceptance. `main.py` configures Qt high-DPI rounding, creates QApplication, applies the dark theme, and shows MainWindow. `send2trash>=1.8.2` is included in requirements.
 * **Final Validation (2026-10-02):** `.venv/Scripts/pytest.exe -q` across the entire project — **50 passed in 1.13s**. Includes all prior core/UI tests plus mocked trash invocation, dry-run preservation, cache safety, partial failures, actual background-thread execution, progress/result/error signals, empty scans, unknown timestamps, cache separation, folder-to-purge UI integration, and safe cancellation on window close. Tests use offscreen Qt and mocked trash operations; real OS Trash and real-camera throughput remain unmeasured. No Git commit was created.
 
+### Scan Completion Crash Guard (2026-10-02)
+* `main.py` installs an exception hook before Qt imports and enables all-thread faulthandler output using a retained duplicate stderr descriptor. Native traces remain visible during LibRaw diagnostic suppression.
+* Worker signals carry only Python data and `PhotoItem` references with preview paths. GUI slots use explicit queued connections; photo widgets enforce GUI-thread construction.
+* Thumbnails decode through QImageReader at bounded size and retain pixmaps no larger than 300x200. UI population uses timer batches limited to 24 cards and a 12ms work budget, including individual large clusters. Small direct populations remain synchronous for existing callers.
+* Completion-only and streamed results share a deduplicated queue. Scan controls stay disabled until both the worker and UI population finish. Cancellation discards pending cards even after the worker stops; repopulation releases pixmaps and safely schedules old widget deletion. The scroll area remains widget-resizable.
+* Validation: `pytest -q` — **66 passed in 6.52s**. New crash-guard tests exercise repeated 120-cluster/240-card completion, a 150-card cluster, GUI-thread delivery from an actual worker thread, event-loop responsiveness, QObject cleanup, Windows GDI handle counts, cancellation during completion rendering, and subprocess traceback output from an unhandled Qt callback. Synthetic headless coverage does not reproduce or establish the cause of the original real-camera native crash. No Git commit was created.
+
 ## 4. Current State & Handoff Context
 * **Current State:** Core Application Fully Functional.
 * **Active Milestone:** `M4_AsyncIntegration` and `M5_FileOps` completed.
